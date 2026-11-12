@@ -1,0 +1,6 @@
+{
+  "name": "licensecourt-genlayer",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": { "test": "node scripts/check-contract.mjs" }
+}
