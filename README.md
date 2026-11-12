@@ -2,6 +2,8 @@
 
 LicenseCourt is an on-chain admission gate for an AI agent that needs permission to use a licensed content, API, or model asset. It converts a mutable link-based claim into a consensus-reviewed license record with immutable source commitments, bounded usage and a named executor.
 
+**Studio Dev deployment:** [`0x6d913f1366c5Eed81C39E587e9A3A2692C122Ceb`](https://explorer-studio-next.genlayer.com/address/0x6d913f1366c5Eed81C39E587e9A3A2692C122Ceb)
+
 ## Why it needs GenLayer
 
 Normal contracts can count a token but cannot independently read and adjudicate whether a web-hosted license actually permits an agent's requested scope. LicenseCourt uses GenLayer validators to render the registered terms, asset, and two independent source pages. The agreed decision and every consequential snapshot hash are persisted with the license record.
