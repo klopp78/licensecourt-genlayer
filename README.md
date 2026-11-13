@@ -24,10 +24,16 @@ Normal contracts can count a token but cannot independently read and adjudicate 
 - Validators compare the decision, license commitment, all source snapshot hashes, and derived assessment hash.
 - The UI waits for transaction finality and re-reads the exact license ID, never a global latest record.
 
+## Browser Integration
+
+The live app imports the repository-defined [`docs/genlayer-adapter.js`](docs/genlayer-adapter.js), not `ethers` or a generic EVM provider. Its read client uses `TransactionHashVariant.LATEST_FINAL`. Every write estimates GenLayer fees, calls `writeContract`, waits for `waitForFinalization`, verifies `isSuccessful`, then re-reads the exact license ID from finalized state before displaying success. Registration, assessment, challenge, consumption, recovery, and revocation therefore depend directly on the submitted Intelligent Contract.
+
 ## Run checks
 
 ```bash
 npm test
 ```
+
+The check suite verifies both the contract lifecycle and the GenLayerJS adapter/finality path used by the browser app.
 
 Deploy `contracts/license_court.py` in GenLayer Studio. Then set that address in `docs/index.html`; the app calls the deployed contract for registration, assessment, challenge, consumption, revocation and record reads.
