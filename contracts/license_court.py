@@ -63,7 +63,7 @@ class LicenseCourt(gl.Contract):
             "canonical_license": canonical, "license_hash": _sha256(_canonical_json(canonical)),
             "source_urls": [a, b], "source_identities": [_source_identity(a), _source_identity(b)],
             "nonce_hash": nonce_hash, "status": "registered", "uses": 0, "assessment_id": "",
-            "challenge": {}, "created_at": now, "updated_at": now,
+            "challenge": {}, "challenge_history": [], "created_at": now, "updated_at": now,
         }
         self.licenses[license_id] = _canonical_json(record)
         self.license_ids.append(license_id)
@@ -80,7 +80,7 @@ class LicenseCourt(gl.Contract):
             raise Exception("license_not_assessable")
         if _now() <= 0 or _now() >= int(record["canonical_license"]["expires_at"]):
             raise Exception("license_expired")
-        context = {"license_id": record["license_id"], "license_hash": record["license_hash"], "canonical_license": record["canonical_license"], "sources": record["source_urls"], "source_identities": record["source_identities"]}
+        context = {"license_id": record["license_id"], "license_hash": record["license_hash"], "canonical_license": record["canonical_license"], "sources": record["source_urls"], "source_identities": record["source_identities"], "challenge": record.get("challenge", {})}
 
         def leader_fn():
             return _canonical_json(_evaluate(context))
@@ -93,7 +93,7 @@ class LicenseCourt(gl.Contract):
                 independent = _parse_assessment(_canonical_json(_evaluate(context)), context)
             except Exception:
                 return False
-            fields = ["decision", "reason_code", "license_hash", "terms_snapshot_hash", "asset_snapshot_hash", "source_bundle_hash", "assessment_hash"]
+            fields = ["decision", "reason_code", "license_hash", "terms_snapshot_hash", "asset_snapshot_hash", "source_bundle_hash", "counterevidence_snapshot_hash", "challenge_commitment", "challenge_bundle_hash", "assessment_hash"]
             return all(proposed[key] == independent[key] for key in fields)
 
         assessment = _parse_assessment(gl.vm.run_nondet_unsafe(leader_fn, validator_fn), context)
@@ -104,13 +104,15 @@ class LicenseCourt(gl.Contract):
         self.assessments[assessment_id] = _canonical_json(assessment)
         record["assessment_id"] = assessment_id
         record["status"] = "approved" if assessment["decision"] == "approved" else "denied"
+        if context["challenge"]:
+            record["challenge_history"].append({"challenge": context["challenge"], "assessment_id": assessment_id, "assessment_hash": assessment["assessment_hash"], "resolved_at": _now()})
         record["challenge"] = {}
         record["updated_at"] = _now()
         self.licenses[record["license_id"]] = _canonical_json(record)
         return assessment_id
 
     @gl.public.write
-    def challenge_license(self, license_id: str, counterevidence_url: str, rationale_hash: str) -> None:
+    def challenge_license(self, license_id: str, counterevidence_url: str, rationale: str) -> None:
         record = _load(self.licenses, license_id, "unknown_license")
         sender = str(gl.message.sender_address).lower()
         license_data = record["canonical_license"]
@@ -124,8 +126,10 @@ class LicenseCourt(gl.Contract):
         evidence = _https_url(counterevidence_url, "invalid_counterevidence")
         if _source_identity(evidence) not in record["source_identities"]:
             raise Exception("counterevidence_must_match_registered_source")
+        rationale_text = _clean(rationale, 2000, "rationale_required")
+        rationale_hash = _sha256(rationale_text)
         record["status"] = "challenged"
-        record["challenge"] = {"challenger": sender, "counterevidence_url": evidence, "rationale_hash": _digest(rationale_hash, "invalid_rationale_hash"), "opened_at": now, "resolve_after": now + 300, "resolve_before": now + 3600}
+        record["challenge"] = {"challenger": sender, "counterevidence_url": evidence, "counterevidence_identity": _source_identity(evidence), "rationale": rationale_text, "rationale_hash": rationale_hash, "challenge_commitment": _sha256(_canonical_json({"license_id": record["license_id"], "challenger": sender, "counterevidence_url": evidence, "rationale_hash": rationale_hash, "opened_at": now})), "opened_at": now, "resolve_after": now + 300, "resolve_before": now + 3600}
         record["updated_at"] = now
         self.licenses[record["license_id"]] = _canonical_json(record)
 
@@ -188,18 +192,21 @@ def _evaluate(context: dict) -> dict:
     terms = _render(context["canonical_license"]["terms_url"])
     asset = _render(context["canonical_license"]["asset_url"])
     source_a, source_b = _render(context["sources"][0]), _render(context["sources"][1])
-    hashes = {"terms_snapshot_hash": terms["hash"], "asset_snapshot_hash": asset["hash"], "source_bundle_hash": _sha256(_canonical_json([source_a["hash"], source_b["hash"], context["source_identities"]]))}
-    if not all(item["readable"] for item in (terms, asset, source_a, source_b)):
+    challenge = context.get("challenge", {})
+    counter = _render(challenge["counterevidence_url"]) if challenge else {"readable": True, "content": "", "hash": _sha256("NO_CHALLENGE")}
+    challenge_commitment = challenge.get("challenge_commitment", _sha256("NO_CHALLENGE"))
+    hashes = {"terms_snapshot_hash": terms["hash"], "asset_snapshot_hash": asset["hash"], "source_bundle_hash": _sha256(_canonical_json([source_a["hash"], source_b["hash"], context["source_identities"]])), "counterevidence_snapshot_hash": counter["hash"], "challenge_commitment": challenge_commitment, "challenge_bundle_hash": _sha256(_canonical_json([challenge_commitment, counter["hash"], challenge.get("rationale_hash", _sha256("NO_CHALLENGE"))]))}
+    if not all(item["readable"] for item in (terms, asset, source_a, source_b, counter)):
         return _assessment("inconclusive", "source_unavailable", context, hashes)
-    prompt = """You are a strict GenLayer license adjudicator. Review only the rendered asset, terms and source pages. Approve only if the stated agent scope is clearly permitted by the terms, sources identify the licensor or authoritative license, and no contradiction is present. Return minified JSON with decision (approved|denied|inconclusive) and reason_code (licensed_scope|terms_conflict|insufficient_evidence|unsafe_source)."""
-    material = {"license": context["canonical_license"], "terms": terms["content"], "asset": asset["content"], "source_a": source_a["content"], "source_b": source_b["content"]}
+    prompt = """You are a strict GenLayer license adjudicator. Review the rendered asset, terms, source pages, and any submitted challenge. For a challenge, treat its counterevidence and rationale as material: deny when they credibly contradict permission, approve only when the challenge is refuted by the committed material, otherwise return inconclusive. Return minified JSON with decision (approved|denied|inconclusive) and reason_code (licensed_scope|terms_conflict|insufficient_evidence|unsafe_source|source_unavailable)."""
+    material = {"license": context["canonical_license"], "terms": terms["content"], "asset": asset["content"], "source_a": source_a["content"], "source_b": source_b["content"], "challenge": challenge, "counterevidence": counter["content"]}
     try:
         raw = json.loads(gl.nondet.exec_prompt(prompt + "\n" + _canonical_json(material)))
         decision = str(raw.get("decision", "inconclusive")).lower()
         reason = str(raw.get("reason_code", "insufficient_evidence")).lower()
     except Exception:
         decision, reason = "inconclusive", "unsafe_source"
-    if decision not in ("approved", "denied", "inconclusive") or reason not in ("licensed_scope", "terms_conflict", "insufficient_evidence", "unsafe_source"):
+    if decision not in ("approved", "denied", "inconclusive") or reason not in ("licensed_scope", "terms_conflict", "insufficient_evidence", "unsafe_source", "source_unavailable"):
         decision, reason = "inconclusive", "insufficient_evidence"
     if decision == "approved" and reason != "licensed_scope":
         decision, reason = "inconclusive", "insufficient_evidence"
@@ -214,9 +221,9 @@ def _assessment(decision: str, reason: str, context: dict, hashes: dict) -> dict
 
 def _parse_assessment(raw: str, context: dict) -> dict:
     value = json.loads(raw)
-    if value.get("decision") not in ("approved", "denied", "inconclusive") or value.get("reason_code") not in ("licensed_scope", "terms_conflict", "insufficient_evidence", "unsafe_source"):
+    if value.get("decision") not in ("approved", "denied", "inconclusive") or value.get("reason_code") not in ("licensed_scope", "terms_conflict", "insufficient_evidence", "unsafe_source", "source_unavailable"):
         raise Exception("invalid_assessment")
-    for key in ("license_hash", "terms_snapshot_hash", "asset_snapshot_hash", "source_bundle_hash", "assessment_hash"):
+    for key in ("license_hash", "terms_snapshot_hash", "asset_snapshot_hash", "source_bundle_hash", "counterevidence_snapshot_hash", "challenge_commitment", "challenge_bundle_hash", "assessment_hash"):
         value[key] = _digest(str(value.get(key, "")), "invalid_assessment_hash")
     if value["license_hash"] != context["license_hash"]:
         raise Exception("license_binding_mismatch")

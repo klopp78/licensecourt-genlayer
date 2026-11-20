@@ -12,7 +12,7 @@ Normal contracts can count a token but cannot independently read and adjudicate 
 
 1. **Register**: the owner binds consumer, named agent, asset URL, terms URL, use scope, positive maximum uses, expiry, and two distinct registrable-domain sources into a canonical SHA-256 license commitment.
 2. **Assess**: validators independently retrieve the four bound sources and agree on a decision plus terms, asset, and source-bundle snapshot commitments.
-3. **Challenge**: only either named party can submit counterevidence from an already committed source identity. This freezes use; resolution is delayed, deadline-bounded, and has a deterministic timeout revocation path.
+3. **Challenge**: only either named party can submit counterevidence from an already committed source identity plus a written rationale. This freezes use; validators render the challenged page, bind its snapshot and the rationale commitment into reassessment, and persist the resolved challenge alongside the assessment. Resolution is delayed, deadline-bounded, and has a deterministic timeout revocation path.
 4. **Consume**: only the named agent can use an approved, unexpired license. Each call creates one receipt and the contract enforces the use cap on-chain.
 5. **Recover**: the owner can revoke an open license; any relevant active state becomes expired after its deadline so no record remains indefinitely actionable.
 
@@ -21,7 +21,7 @@ Normal contracts can count a token but cannot independently read and adjudicate 
 - Every ID derives from a canonical JSON representation and a one-use SHA-256 nonce.
 - Source identity rejects user-info and port-bearing authorities, folds `www`, and requires different base host identities for the two evidence sources.
 - Inconclusive retrieval is never silently approved.
-- Validators compare the decision, license commitment, all source snapshot hashes, and derived assessment hash.
+- Validators compare the decision, license commitment, all baseline and challenged-source snapshot hashes, the challenge commitment, and the derived assessment hash.
 - The UI waits for transaction finality and re-reads the exact license ID, never a global latest record.
 
 ## Browser Integration
